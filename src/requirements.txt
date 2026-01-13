@@ -1,0 +1,24 @@
+# Microsoft Graph API SDK
+msgraph-sdk>=1.0.0
+
+# Azure Authentication
+azure-identity>=1.12.0
+
+# Microsoft Authentication Library
+msal>=1.24.0
+
+# Environment Variable Management
+python-dotenv>=1.0.0
+
+# MCP (Model Context Protocol) SDK
+mcp>=0.1.0
+
+# HTTP MCP Server Framework
+fastapi>=0.104.0
+uvicorn[standard]>=0.24.0
+
+# Text Extraction Libraries (Phase 3)
+pypdf>=3.17.0          # PDF text extraction
+python-docx>=1.1.0     # Word document text extraction
+openpyxl>=3.1.2        # Excel spreadsheet text extraction
+python-pptx>=0.6.23    # PowerPoint text extraction
