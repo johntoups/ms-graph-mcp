@@ -18,6 +18,7 @@ import base64
 import mimetypes
 from pathlib import Path
 from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 from typing import Any, Callable, TypeVar, Optional, List, Tuple, Dict
 from functools import wraps
 from dotenv import load_dotenv
@@ -108,6 +109,10 @@ load_dotenv(dotenv_path=env_path)
 CLIENT_ID = os.getenv('CLIENT_ID')
 TENANT_ID = os.getenv('TENANT_ID')
 SCOPES = os.getenv('SCOPES', 'User.Read Mail.Read').split()
+
+# Display timezone for calendar events (IANA timezone name)
+# Converts event times from their stored timezone to this timezone for display
+MCP_MS_GRAPH_TIMEZONE = os.getenv('MCP_MS_GRAPH_TIMEZONE', 'UTC')
 
 # Validate required environment variables
 if not CLIENT_ID or not TENANT_ID:
@@ -5237,14 +5242,14 @@ async def delete_folder(
 
 def format_event_time(dt_tz: DateTimeTimeZone, is_all_day: bool = False) -> str:
     """
-    Format a DateTimeTimeZone object for display.
+    Format a DateTimeTimeZone object for display in MCP_MS_GRAPH_TIMEZONE.
 
     Args:
         dt_tz: DateTimeTimeZone object from Graph API
         is_all_day: Whether this is an all-day event
 
     Returns:
-        Formatted time string
+        Formatted time string in MCP_MS_GRAPH_TIMEZONE
     """
     if not dt_tz or not dt_tz.date_time:
         return "Unknown"
@@ -5252,7 +5257,7 @@ def format_event_time(dt_tz: DateTimeTimeZone, is_all_day: bool = False) -> str:
     try:
         # Parse the datetime string
         dt_str = dt_tz.date_time
-        tz_str = dt_tz.time_zone or "UTC"
+        source_tz_str = dt_tz.time_zone or "UTC"
 
         # Parse datetime (Graph API returns ISO format without timezone offset)
         if "T" in dt_str:
@@ -5262,11 +5267,15 @@ def format_event_time(dt_tz: DateTimeTimeZone, is_all_day: bool = False) -> str:
             dt = datetime.fromisoformat(dt_str)
 
         if is_all_day:
-            # All-day events: just show the date
+            # All-day events: just show the date (no timezone conversion needed)
             return dt.strftime("%a %d %b %Y")
         else:
-            # Regular events: show date and time
-            return dt.strftime("%a %d %b %Y, %H:%M")
+            # Convert from source timezone to display timezone
+            source_tz = ZoneInfo(source_tz_str)
+            display_tz = ZoneInfo(MCP_MS_GRAPH_TIMEZONE)
+            dt_with_tz = dt.replace(tzinfo=source_tz)
+            dt_local = dt_with_tz.astimezone(display_tz)
+            return dt_local.strftime("%a %d %b %Y, %H:%M")
 
     except Exception:
         return dt_tz.date_time or "Unknown"
@@ -5274,7 +5283,7 @@ def format_event_time(dt_tz: DateTimeTimeZone, is_all_day: bool = False) -> str:
 
 def format_event_time_range(start: DateTimeTimeZone, end: DateTimeTimeZone, is_all_day: bool = False) -> str:
     """
-    Format start and end times as a range.
+    Format start and end times as a range in MCP_MS_GRAPH_TIMEZONE.
 
     Args:
         start: Start DateTimeTimeZone
@@ -5282,7 +5291,7 @@ def format_event_time_range(start: DateTimeTimeZone, end: DateTimeTimeZone, is_a
         is_all_day: Whether this is an all-day event
 
     Returns:
-        Formatted time range string
+        Formatted time range string in MCP_MS_GRAPH_TIMEZONE
     """
     if is_all_day:
         return f"{format_event_time(start, True)} (all day)"
@@ -5290,14 +5299,20 @@ def format_event_time_range(start: DateTimeTimeZone, end: DateTimeTimeZone, is_a
     try:
         start_dt = datetime.fromisoformat(start.date_time.replace("Z", ""))
         end_dt = datetime.fromisoformat(end.date_time.replace("Z", ""))
-        tz = start.time_zone or "UTC"
+        source_tz_str = start.time_zone or "UTC"
+
+        # Convert from source timezone to display timezone
+        source_tz = ZoneInfo(source_tz_str)
+        display_tz = ZoneInfo(MCP_MS_GRAPH_TIMEZONE)
+        start_local = start_dt.replace(tzinfo=source_tz).astimezone(display_tz)
+        end_local = end_dt.replace(tzinfo=source_tz).astimezone(display_tz)
 
         # Same day: show date once with time range
-        if start_dt.date() == end_dt.date():
-            return f"{start_dt.strftime('%a %d %b %Y')}, {start_dt.strftime('%H:%M')}-{end_dt.strftime('%H:%M')} {tz}"
+        if start_local.date() == end_local.date():
+            return f"{start_local.strftime('%a %d %b %Y')}, {start_local.strftime('%H:%M')}-{end_local.strftime('%H:%M')} {MCP_MS_GRAPH_TIMEZONE}"
         else:
             # Different days: show both dates
-            return f"{start_dt.strftime('%a %d %b %Y %H:%M')} - {end_dt.strftime('%a %d %b %Y %H:%M')} {tz}"
+            return f"{start_local.strftime('%a %d %b %Y %H:%M')} - {end_local.strftime('%a %d %b %Y %H:%M')} {MCP_MS_GRAPH_TIMEZONE}"
 
     except Exception:
         return f"{format_event_time(start)} - {format_event_time(end)}"
@@ -5536,13 +5551,17 @@ async def list_calendar_events(
                 total_events += 1
                 subject = event.subject or "(No subject)"
 
-                # Time display
+                # Time display (with timezone conversion)
                 if event.is_all_day:
                     time_str = "(All day)"
                 else:
-                    start_time = datetime.fromisoformat(event.start.date_time.replace("Z", "")).strftime("%H:%M")
-                    end_time = datetime.fromisoformat(event.end.date_time.replace("Z", "")).strftime("%H:%M")
-                    time_str = f"{start_time}-{end_time}"
+                    # Convert times to display timezone
+                    source_tz_str = event.start.time_zone or "UTC"
+                    source_tz = ZoneInfo(source_tz_str)
+                    display_tz = ZoneInfo(MCP_MS_GRAPH_TIMEZONE)
+                    start_dt = datetime.fromisoformat(event.start.date_time.replace("Z", "")).replace(tzinfo=source_tz).astimezone(display_tz)
+                    end_dt = datetime.fromisoformat(event.end.date_time.replace("Z", "")).replace(tzinfo=source_tz).astimezone(display_tz)
+                    time_str = f"{start_dt.strftime('%H:%M')}-{end_dt.strftime('%H:%M')}"
 
                 lines.append(f"{time_str:14} {subject}")
 
@@ -7958,9 +7977,9 @@ async def create_calendar_event(
         else:
             new_event.is_all_day = False
             start_tz.date_time = start_dt.strftime("%Y-%m-%dT%H:%M:%S")
-            start_tz.time_zone = "Europe/London"  # Default timezone
+            start_tz.time_zone = MCP_MS_GRAPH_TIMEZONE  # Default timezone
             end_tz.date_time = end_dt.strftime("%Y-%m-%dT%H:%M:%S")
-            end_tz.time_zone = "Europe/London"
+            end_tz.time_zone = MCP_MS_GRAPH_TIMEZONE
 
         new_event.start = start_tz
         new_event.end = end_tz
@@ -8102,12 +8121,12 @@ async def create_meeting(
         # Set times
         start_tz = DateTimeTimeZone()
         start_tz.date_time = start_dt.strftime("%Y-%m-%dT%H:%M:%S")
-        start_tz.time_zone = "Europe/London"
+        start_tz.time_zone = MCP_MS_GRAPH_TIMEZONE
         new_event.start = start_tz
 
         end_tz = DateTimeTimeZone()
         end_tz.date_time = end_dt.strftime("%Y-%m-%dT%H:%M:%S")
-        end_tz.time_zone = "Europe/London"
+        end_tz.time_zone = MCP_MS_GRAPH_TIMEZONE
         new_event.end = end_tz
 
         # Parse attendees
@@ -8288,7 +8307,7 @@ async def update_calendar_event(
                 start_dt = datetime.fromisoformat(start_datetime)
                 start_tz = DateTimeTimeZone()
                 start_tz.date_time = start_dt.strftime("%Y-%m-%dT%H:%M:%S")
-                start_tz.time_zone = "Europe/London"
+                start_tz.time_zone = MCP_MS_GRAPH_TIMEZONE
                 update_event.start = start_tz
                 updated_fields.append("start time")
             except ValueError as ve:
@@ -8299,7 +8318,7 @@ async def update_calendar_event(
                 end_dt = datetime.fromisoformat(end_datetime)
                 end_tz = DateTimeTimeZone()
                 end_tz.date_time = end_dt.strftime("%Y-%m-%dT%H:%M:%S")
-                end_tz.time_zone = "Europe/London"
+                end_tz.time_zone = MCP_MS_GRAPH_TIMEZONE
                 update_event.end = end_tz
                 updated_fields.append("end time")
             except ValueError as ve:
@@ -8685,12 +8704,12 @@ async def propose_new_time(
         proposed_time = TimeSlot()
         start_tz = DateTimeTimeZone()
         start_tz.date_time = start_dt.strftime("%Y-%m-%dT%H:%M:%S")
-        start_tz.time_zone = "Europe/London"
+        start_tz.time_zone = MCP_MS_GRAPH_TIMEZONE
         proposed_time.start = start_tz
 
         end_tz = DateTimeTimeZone()
         end_tz.date_time = end_dt.strftime("%Y-%m-%dT%H:%M:%S")
-        end_tz.time_zone = "Europe/London"
+        end_tz.time_zone = MCP_MS_GRAPH_TIMEZONE
         proposed_time.end = end_tz
 
         # Use tentatively accept with proposed new time
