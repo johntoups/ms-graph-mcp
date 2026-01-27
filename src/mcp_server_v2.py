@@ -11270,18 +11270,26 @@ async def add_planner_checklist_item(
             details_etag = details_data.get("@odata.etag", "")
 
             # Get existing checklist (may be None or empty dict)
+            # Note: Planner API requires @odata.type annotation for all checklist items
             existing_checklist = {}
-            if hasattr(details_data.get("checklist"), "additional_data"):
-                existing_checklist = details_data["checklist"].additional_data or {}
-            elif isinstance(details_data.get("checklist"), dict):
-                existing_checklist = {
-                    k: v for k, v in details_data["checklist"].items()
-                    if not k.startswith("@")
+            raw_checklist = details_data.get("checklist", {}) or {}
+            if hasattr(raw_checklist, "additional_data"):
+                raw_checklist = raw_checklist.additional_data or {}
+
+            for k, v in raw_checklist.items():
+                if k.startswith("@"):
+                    continue
+                # Ensure each item has the required @odata.type annotation
+                existing_checklist[k] = {
+                    "@odata.type": "#microsoft.graph.plannerChecklistItem",
+                    "isChecked": v.get("isChecked", False),
+                    "title": v.get("title", "")
                 }
 
             # Generate new item ID and add to checklist
             new_item_id = str(uuid.uuid4())
             existing_checklist[new_item_id] = {
+                "@odata.type": "#microsoft.graph.plannerChecklistItem",
                 "isChecked": is_checked,
                 "title": title
             }
@@ -11378,14 +11386,19 @@ async def update_planner_checklist_item(
             details_data = details_resp.json()
             details_etag = details_data.get("@odata.etag", "")
 
-            # Get existing checklist
+            # Get existing checklist with @odata.type annotations
             existing_checklist = {}
-            if hasattr(details_data.get("checklist"), "additional_data"):
-                existing_checklist = details_data["checklist"].additional_data or {}
-            elif isinstance(details_data.get("checklist"), dict):
-                existing_checklist = {
-                    k: v for k, v in details_data["checklist"].items()
-                    if not k.startswith("@")
+            raw_checklist = details_data.get("checklist", {}) or {}
+            if hasattr(raw_checklist, "additional_data"):
+                raw_checklist = raw_checklist.additional_data or {}
+
+            for k, v in raw_checklist.items():
+                if k.startswith("@"):
+                    continue
+                existing_checklist[k] = {
+                    "@odata.type": "#microsoft.graph.plannerChecklistItem",
+                    "isChecked": v.get("isChecked", False),
+                    "title": v.get("title", "")
                 }
 
             # Find the item
@@ -11410,8 +11423,9 @@ async def update_planner_checklist_item(
 
             new_title = title if title else current_title
 
-            # Update the item
+            # Update the item with @odata.type annotation
             existing_checklist[item_id] = {
+                "@odata.type": "#microsoft.graph.plannerChecklistItem",
                 "isChecked": new_checked,
                 "title": new_title
             }
@@ -11504,14 +11518,19 @@ async def delete_planner_checklist_item(
             details_data = details_resp.json()
             details_etag = details_data.get("@odata.etag", "")
 
-            # Get existing checklist
+            # Get existing checklist with @odata.type annotations
             existing_checklist = {}
-            if hasattr(details_data.get("checklist"), "additional_data"):
-                existing_checklist = details_data["checklist"].additional_data or {}
-            elif isinstance(details_data.get("checklist"), dict):
-                existing_checklist = {
-                    k: v for k, v in details_data["checklist"].items()
-                    if not k.startswith("@")
+            raw_checklist = details_data.get("checklist", {}) or {}
+            if hasattr(raw_checklist, "additional_data"):
+                raw_checklist = raw_checklist.additional_data or {}
+
+            for k, v in raw_checklist.items():
+                if k.startswith("@"):
+                    continue
+                existing_checklist[k] = {
+                    "@odata.type": "#microsoft.graph.plannerChecklistItem",
+                    "isChecked": v.get("isChecked", False),
+                    "title": v.get("title", "")
                 }
 
             # Find and remove the item
