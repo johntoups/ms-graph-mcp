@@ -11218,6 +11218,352 @@ async def delete_planner_task(
         )
 
 
+@mcp.tool()
+async def add_planner_checklist_item(
+    task_id: str,
+    title: str,
+    is_checked: bool = False,
+    mailbox_id: str = "me"
+) -> str:
+    """
+    Add a checklist item to a Planner task.
+
+    Planner tasks can have checklists (subtasks) that can be checked off.
+    This function adds a new item to an existing task's checklist.
+
+    Args:
+        task_id: The task ID (from list_planner_tasks) - REQUIRED
+        title: The checklist item text - REQUIRED
+        is_checked: Whether the item starts as checked (default: False)
+        mailbox_id: User context ("me" or email address)
+
+    Returns:
+        Confirmation with the new checklist item details
+    """
+    import uuid
+
+    try:
+        token_data = load_token_cache()
+        if not token_data or not is_token_valid(token_data):
+            return (
+                f"❌ Authentication required\n\n"
+                f"Please call test_connection first to authenticate."
+            )
+
+        access_token = token_data['access_token']
+
+        async with httpx.AsyncClient() as http_client:
+            # Get task details (contains checklist and etag)
+            details_resp = await http_client.get(
+                f"https://graph.microsoft.com/v1.0/planner/tasks/{task_id}/details",
+                headers={"Authorization": f"Bearer {access_token}"},
+                timeout=API_TIMEOUT
+            )
+
+            if details_resp.status_code == 404:
+                return f"❌ Task not found\n\nTask ID: {task_id}"
+
+            if details_resp.status_code != 200:
+                return f"❌ Error fetching task details\n\nStatus: {details_resp.status_code}\n{details_resp.text}"
+
+            details_data = details_resp.json()
+            details_etag = details_data.get("@odata.etag", "")
+
+            # Get existing checklist (may be None or empty dict)
+            existing_checklist = {}
+            if hasattr(details_data.get("checklist"), "additional_data"):
+                existing_checklist = details_data["checklist"].additional_data or {}
+            elif isinstance(details_data.get("checklist"), dict):
+                existing_checklist = {
+                    k: v for k, v in details_data["checklist"].items()
+                    if not k.startswith("@")
+                }
+
+            # Generate new item ID and add to checklist
+            new_item_id = str(uuid.uuid4())
+            existing_checklist[new_item_id] = {
+                "isChecked": is_checked,
+                "title": title
+            }
+
+            # Patch task details with updated checklist
+            patch_resp = await http_client.patch(
+                f"https://graph.microsoft.com/v1.0/planner/tasks/{task_id}/details",
+                headers={
+                    "Authorization": f"Bearer {access_token}",
+                    "Content-Type": "application/json",
+                    "If-Match": details_etag
+                },
+                json={"checklist": existing_checklist},
+                timeout=API_TIMEOUT
+            )
+
+            if patch_resp.status_code == 412:
+                return (
+                    f"❌ Task was modified by someone else\n\n"
+                    f"Task ID: {task_id}\n"
+                    f"Please try again."
+                )
+
+            if patch_resp.status_code not in [200, 204]:
+                return f"❌ Error updating checklist\n\nStatus: {patch_resp.status_code}\n{patch_resp.text}"
+
+            status = "☑️" if is_checked else "☐"
+            return (
+                f"✅ Checklist item added!\n\n"
+                f"Task ID: `{task_id}`\n"
+                f"Item: {status} {title}\n"
+                f"Item ID: `{new_item_id}`\n\n"
+                f"Total checklist items: {len(existing_checklist)}"
+            )
+
+    except Exception as e:
+        error_type = type(e).__name__
+        error_msg = str(e)
+
+        return (
+            f"❌ Error adding checklist item: {error_type}\n\n"
+            f"Task ID: {task_id}\n"
+            f"Error: {error_msg}"
+        )
+
+
+@mcp.tool()
+async def update_planner_checklist_item(
+    task_id: str,
+    item_id: str,
+    is_checked: bool = None,
+    title: str = "",
+    mailbox_id: str = "me"
+) -> str:
+    """
+    Update or toggle a checklist item in a Planner task.
+
+    Use this to check/uncheck items or update their text.
+
+    Args:
+        task_id: The task ID (from list_planner_tasks) - REQUIRED
+        item_id: The checklist item ID (from get_planner_task) - REQUIRED
+        is_checked: Set checked state (True/False), omit to toggle
+        title: New title text (optional, keeps existing if not provided)
+        mailbox_id: User context ("me" or email address)
+
+    Returns:
+        Updated checklist item details
+    """
+    try:
+        token_data = load_token_cache()
+        if not token_data or not is_token_valid(token_data):
+            return (
+                f"❌ Authentication required\n\n"
+                f"Please call test_connection first to authenticate."
+            )
+
+        access_token = token_data['access_token']
+
+        async with httpx.AsyncClient() as http_client:
+            # Get task details
+            details_resp = await http_client.get(
+                f"https://graph.microsoft.com/v1.0/planner/tasks/{task_id}/details",
+                headers={"Authorization": f"Bearer {access_token}"},
+                timeout=API_TIMEOUT
+            )
+
+            if details_resp.status_code == 404:
+                return f"❌ Task not found\n\nTask ID: {task_id}"
+
+            if details_resp.status_code != 200:
+                return f"❌ Error fetching task details\n\nStatus: {details_resp.status_code}\n{details_resp.text}"
+
+            details_data = details_resp.json()
+            details_etag = details_data.get("@odata.etag", "")
+
+            # Get existing checklist
+            existing_checklist = {}
+            if hasattr(details_data.get("checklist"), "additional_data"):
+                existing_checklist = details_data["checklist"].additional_data or {}
+            elif isinstance(details_data.get("checklist"), dict):
+                existing_checklist = {
+                    k: v for k, v in details_data["checklist"].items()
+                    if not k.startswith("@")
+                }
+
+            # Find the item
+            if item_id not in existing_checklist:
+                available_ids = list(existing_checklist.keys())[:5]
+                return (
+                    f"❌ Checklist item not found\n\n"
+                    f"Item ID: {item_id}\n"
+                    f"Available IDs: {available_ids}"
+                )
+
+            current_item = existing_checklist[item_id]
+            current_checked = current_item.get("isChecked", False)
+            current_title = current_item.get("title", "")
+
+            # Determine new values
+            if is_checked is None:
+                # Toggle mode
+                new_checked = not current_checked
+            else:
+                new_checked = is_checked
+
+            new_title = title if title else current_title
+
+            # Update the item
+            existing_checklist[item_id] = {
+                "isChecked": new_checked,
+                "title": new_title
+            }
+
+            # Patch task details
+            patch_resp = await http_client.patch(
+                f"https://graph.microsoft.com/v1.0/planner/tasks/{task_id}/details",
+                headers={
+                    "Authorization": f"Bearer {access_token}",
+                    "Content-Type": "application/json",
+                    "If-Match": details_etag
+                },
+                json={"checklist": existing_checklist},
+                timeout=API_TIMEOUT
+            )
+
+            if patch_resp.status_code == 412:
+                return (
+                    f"❌ Task was modified by someone else\n\n"
+                    f"Task ID: {task_id}\n"
+                    f"Please try again."
+                )
+
+            if patch_resp.status_code not in [200, 204]:
+                return f"❌ Error updating checklist\n\nStatus: {patch_resp.status_code}\n{patch_resp.text}"
+
+            old_status = "☑️" if current_checked else "☐"
+            new_status = "☑️" if new_checked else "☐"
+
+            return (
+                f"✅ Checklist item updated!\n\n"
+                f"Task ID: `{task_id}`\n"
+                f"Item ID: `{item_id}`\n\n"
+                f"Before: {old_status} {current_title}\n"
+                f"After: {new_status} {new_title}"
+            )
+
+    except Exception as e:
+        error_type = type(e).__name__
+        error_msg = str(e)
+
+        return (
+            f"❌ Error updating checklist item: {error_type}\n\n"
+            f"Task ID: {task_id}\n"
+            f"Error: {error_msg}"
+        )
+
+
+@mcp.tool()
+async def delete_planner_checklist_item(
+    task_id: str,
+    item_id: str,
+    mailbox_id: str = "me"
+) -> str:
+    """
+    Delete a checklist item from a Planner task.
+
+    Args:
+        task_id: The task ID (from list_planner_tasks) - REQUIRED
+        item_id: The checklist item ID (from get_planner_task) - REQUIRED
+        mailbox_id: User context ("me" or email address)
+
+    Returns:
+        Confirmation of deletion
+    """
+    try:
+        token_data = load_token_cache()
+        if not token_data or not is_token_valid(token_data):
+            return (
+                f"❌ Authentication required\n\n"
+                f"Please call test_connection first to authenticate."
+            )
+
+        access_token = token_data['access_token']
+
+        async with httpx.AsyncClient() as http_client:
+            # Get task details
+            details_resp = await http_client.get(
+                f"https://graph.microsoft.com/v1.0/planner/tasks/{task_id}/details",
+                headers={"Authorization": f"Bearer {access_token}"},
+                timeout=API_TIMEOUT
+            )
+
+            if details_resp.status_code == 404:
+                return f"❌ Task not found\n\nTask ID: {task_id}"
+
+            if details_resp.status_code != 200:
+                return f"❌ Error fetching task details\n\nStatus: {details_resp.status_code}\n{details_resp.text}"
+
+            details_data = details_resp.json()
+            details_etag = details_data.get("@odata.etag", "")
+
+            # Get existing checklist
+            existing_checklist = {}
+            if hasattr(details_data.get("checklist"), "additional_data"):
+                existing_checklist = details_data["checklist"].additional_data or {}
+            elif isinstance(details_data.get("checklist"), dict):
+                existing_checklist = {
+                    k: v for k, v in details_data["checklist"].items()
+                    if not k.startswith("@")
+                }
+
+            # Find and remove the item
+            if item_id not in existing_checklist:
+                return (
+                    f"❌ Checklist item not found\n\n"
+                    f"Item ID: {item_id}"
+                )
+
+            deleted_item = existing_checklist.pop(item_id)
+            deleted_title = deleted_item.get("title", "Untitled")
+
+            # Patch task details with item removed
+            patch_resp = await http_client.patch(
+                f"https://graph.microsoft.com/v1.0/planner/tasks/{task_id}/details",
+                headers={
+                    "Authorization": f"Bearer {access_token}",
+                    "Content-Type": "application/json",
+                    "If-Match": details_etag
+                },
+                json={"checklist": existing_checklist},
+                timeout=API_TIMEOUT
+            )
+
+            if patch_resp.status_code == 412:
+                return (
+                    f"❌ Task was modified by someone else\n\n"
+                    f"Task ID: {task_id}\n"
+                    f"Please try again."
+                )
+
+            if patch_resp.status_code not in [200, 204]:
+                return f"❌ Error updating checklist\n\nStatus: {patch_resp.status_code}\n{patch_resp.text}"
+
+            return (
+                f"✅ Checklist item deleted!\n\n"
+                f"Task ID: `{task_id}`\n"
+                f"Deleted: {deleted_title}\n\n"
+                f"Remaining checklist items: {len(existing_checklist)}"
+            )
+
+    except Exception as e:
+        error_type = type(e).__name__
+        error_msg = str(e)
+
+        return (
+            f"❌ Error deleting checklist item: {error_type}\n\n"
+            f"Task ID: {task_id}\n"
+            f"Error: {error_msg}"
+        )
+
+
 # ============================================================================
 # M365 GROUPS (Phase 11 - Groups)
 # ============================================================================
