@@ -108,7 +108,7 @@ load_dotenv(dotenv_path=env_path)
 
 CLIENT_ID = os.getenv('CLIENT_ID')
 TENANT_ID = os.getenv('TENANT_ID')
-SCOPES = os.getenv('SCOPES', 'User.Read Mail.Read').split()
+SCOPES = os.getenv('SCOPES', 'User.Read Mail.Read Mail.Send offline_access').split()
 
 # Display timezone for calendar events (IANA timezone name)
 # Converts event times from their stored timezone to this timezone for display
